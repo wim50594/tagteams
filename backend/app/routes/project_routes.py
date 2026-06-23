@@ -767,6 +767,14 @@ async def delete_project(
         await db.delete(item)
         deleted_items += 1
 
+    # Delete batch assignments
+    assignments = (await db.exec(
+        select(BatchAssignment).where(BatchAssignment.project_id == project_id)
+    )).all()
+    for row in assignments:
+        await db.delete(row)
+    await db.flush()
+
     # Delete project (cascades to members, annotations, taxonomy, final_decisions)
     await db.delete(project)
     await db.commit()

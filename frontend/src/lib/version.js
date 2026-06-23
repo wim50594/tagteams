@@ -10,11 +10,14 @@
  *
  * Falls back to VITE_APP_VERSION (baked in at frontend build time) if the
  * backend can't be reached yet, and finally to "dev".
+ *
+ * NOTE: This module deliberately uses a bare fetch() rather than the
+ * api client (./api) to avoid any interference from auth headers, cookie
+ * handling, or 401 refresh logic — the health endpoint is public and the
+ * version is needed before the user is even logged in.
  */
 
 import { useEffect, useState } from 'react'
-
-import { api } from './api'
 
 const FALLBACK_VERSION = import.meta.env.VITE_APP_VERSION || 'dev'
 
@@ -24,7 +27,12 @@ let inFlight = null
 async function fetchVersion() {
     if (cachedVersion) return cachedVersion
     if (!inFlight) {
-        inFlight = api.get('/api/health')
+        const BASE = import.meta.env.VITE_API_BASE_URL || ''
+        inFlight = fetch(`${BASE}/api/health`)
+            .then((res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`)
+                return res.json()
+            })
             .then((data) => {
                 cachedVersion = data?.version || FALLBACK_VERSION
                 return cachedVersion
