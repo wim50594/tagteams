@@ -1,6 +1,7 @@
 """
 Central settings – all values sourced from environment variables.
 """
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -42,11 +43,6 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     media_dir: str = "data/media"
 
-    # App version, baked into the image at build time from the release's
-    # git tag (see Dockerfile ARG/ENV and .github/workflows/release.yml).
-    # "dev" is the default for local/dev runs where no tag applies.
-    app_version: str = "dev"
-
     @model_validator(mode="after")
     def _validate(self) -> "Settings":
         if self.admin_bootstrap:
@@ -70,6 +66,23 @@ class Settings(BaseSettings):
         p = Path(self.media_dir)
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def app_version(self) -> str:
+        """App version baked into the Docker image at build time.
+
+        The value comes from the ``APP_VERSION`` environment variable set by the
+        Dockerfile via ``ENV APP_VERSION=${APP_VERSION}``, which in turn is fed
+        by the release pipeline's ``build-args`` (the git tag, e.g. ``2.1.11``).
+
+        This is deliberately NOT a Pydantic field — it lives as a plain property
+        so that ``.env`` files (whether loaded by Pydantic's dotenv support or by
+        docker-compose's ``env_file`` directive) can NEVER override the build-time
+        value.
+
+        Falls back to ``"dev"`` for local development where no tag applies.
+        """
+        return os.environ.get("APP_VERSION", "dev")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

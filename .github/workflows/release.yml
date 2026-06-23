@@ -1,80 +1,31 @@
 name: Release
 on:
-  # Triggered AFTER CI passes on main (see ci.yml)
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
-  # Re-run a failed release by pushing a v* tag manually
   push:
+    branches: [main]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
 permissions: { contents: write, packages: write }
 
-# Cancel in-progress runs on the same branch — prevents race
-# conditions when multiple commits are pushed in quick succession.
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   publish:
-    # Only run when CI succeeded (workflow_run) or when triggered
-    # manually / by tag push.
-    if: |
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     strategy:
       matrix:
         component: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
         with:
-          # When triggered by CI, checkout the exact SHA that passed.
-          # Otherwise use the triggering ref (tag push / manual dispatch).
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
           fetch-depth: 0
-          fetch-tags: true
 
       - name: Bump version and push tag
         id: auto_tag
-        if: github.event_name == 'workflow_run'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: anothrNick/github-tag-action@1.71.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
-        continue-on-error: true
-
-      # ── Determine version ──────────────────────────────────
-      # Tag push / dispatch: use the tag as-is.
-      # Workflow_run   (CI passed): auto-bump succeeded → use new tag.
-      # Workflow_run   (CI passed): auto-bump failed   → tag already
-      #   exists from a previous partial run, use highest existing.
-      - name: Determine version
-        id: version
-        run: |
-          if [[ "${{ github.event_name }}" != "workflow_run" ]]; then
-            # Manual tag push or workflow_dispatch — use the ref
-            VERSION="${{ github.ref_name }}"
-          elif [[ -n "${{ steps.auto_tag.outputs.new_tag }}" ]]; then
-            VERSION="${{ steps.auto_tag.outputs.new_tag }}"
-          else
-            git fetch --tags --force
-            VERSION=$(git tag -l 'v*' --sort=-v:refname | head -1)
-            if [[ -z "$VERSION" ]]; then
-              echo "ERROR: No version tag found"
-              exit 1
-            fi
-            echo "::notice::Auto-bump skipped (tag exists). Using $VERSION"
-          fi
-
-          CLEAN_VERSION="${VERSION#v}"
-          echo "value=$CLEAN_VERSION" >> "$GITHUB_OUTPUT"
-          echo "raw_tag=$VERSION" >> "$GITHUB_OUTPUT"
 
       # Docker setups
       - uses: docker/setup-qemu-action@v3
@@ -84,7 +35,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # handles manual tags, auto tags, and provides a dev fallback
+      - name: Determine app version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ steps.auto_tag.outputs.new_tag }}" ]]; then
+            VERSION="${{ steps.auto_tag.outputs.new_tag }}"
+          else
+            echo "ERROR: No valid tag found and auto-bump failed!"
+            exit 1
+          fi
+
+          CLEAN_VERSION="${VERSION#v}"
+          echo "value=$CLEAN_VERSION" >> "$GITHUB_OUTPUT"
+          echo "raw_tag=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Generate Docker metadata
+        if: steps.version.outputs.value != 'dev'
         id: meta
         uses: docker/metadata-action@v5
         with:
