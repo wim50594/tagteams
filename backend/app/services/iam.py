@@ -82,12 +82,16 @@ class IAMService:
 
     @staticmethod
     async def create_account_invitation(
-        db: AsyncSession, created_by: int, expires_in_days: int | None
+        db: AsyncSession,
+        created_by: int,
+        expires_in_days: int | None,
+        is_admin: bool = False,
     ) -> AccountInvitation:
         """Create a one-use account invitation without project membership."""
         invitation = AccountInvitation(
             token=secrets.token_urlsafe(32),
             created_by=created_by,
+            is_admin=is_admin,
             expires_at=(utcnow() + timedelta(days=expires_in_days))
             if expires_in_days is not None else None,
         )
@@ -219,6 +223,8 @@ class IAMService:
         user = await IAMService._create_invited_user(
             db, username, display_name, password
         )
+        user.is_admin = invitation.is_admin
+        db.add(user)
         await db.commit()
         await db.refresh(user)
         return user

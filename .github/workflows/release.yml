@@ -22,6 +22,19 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tagteams
+          POSTGRES_PASSWORD: tagteams
+          POSTGRES_DB: tagteams_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
     strategy:
       matrix:
         component: [backend, frontend]
@@ -39,7 +52,7 @@ jobs:
           uv run pytest -q
         env:
           PYTHONPATH: .
-          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          DATABASE_URL: postgresql+asyncpg://tagteams:tagteams@localhost:5432/tagteams_test
           JWT_SECRET: release-test-secret
       - uses: actions/setup-node@v4
         if: matrix.component == 'frontend'

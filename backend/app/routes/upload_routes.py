@@ -24,6 +24,7 @@ from app.auth import User, get_current_user
 from app.config import get_settings
 from app.database import cache_delete, cache_key_item, get_session
 from app.models import Item, ProjectItemRef, TableUpload
+from app.services.application_settings import ApplicationSettingsService
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
@@ -263,6 +264,9 @@ async def upload_universal(
 ):
     settings = get_settings()
     media_dir = settings.media_path
+    max_upload_size = (
+        await ApplicationSettingsService.get_max_upload_size_mb(db) * 1024 * 1024
+    )
 
     files_meta: list[dict[str, Any]] = []
     item_ids: list[str] = []
@@ -275,7 +279,13 @@ async def upload_universal(
         if not base_name or base_name.startswith("."):
             continue
 
-        content = await f.read()
+        content = await f.read(max_upload_size + 1)
+        if len(content) > max_upload_size:
+            skipped.append({
+                "name": base_name,
+                "reason": f"file exceeds the {max_upload_size // (1024 * 1024)} MB limit",
+            })
+            continue
         if not content:
             skipped.append({"name": base_name, "reason": "empty file"})
             continue

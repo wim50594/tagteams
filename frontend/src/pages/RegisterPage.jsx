@@ -48,7 +48,7 @@ export default function RegisterPage() {
     e.preventDefault()
     setError('')
     if (form.password !== form.password2) {
-      setError('Passwords do not match.')
+      setError(t('auth.passwordsDoNotMatch'))
       return
     }
     setLoading(true)
@@ -75,17 +75,17 @@ export default function RegisterPage() {
         navigate('/')
       }
     } catch (err) {
-      setError(err.message || 'Registration failed')
+      setError(err.message || t('auth.registrationFailed'))
       setLoading(false)
     }
   }
 
   const title = isNewSetup
-    ? 'Set up your admin account'
+    ? t('auth.setupAdmin')
     : inviteInfo?.valid && inviteInfo.invitation_type === 'project'
-      ? `Join "${inviteInfo.project_name}" as ${inviteInfo.role}`
+      ? t('auth.joinProject', { project: inviteInfo.project_name, role: t(`usersPage.roles.${inviteInfo.role}`, inviteInfo.role) })
       : inviteInfo?.valid
-        ? 'Create your account'
+        ? t('auth.createYourAccount')
         : t('auth.register')
 
   if (needsInvite) {
@@ -113,11 +113,7 @@ export default function RegisterPage() {
           <span className="text-5xl">🏷️</span>
           <h1 className="text-2xl font-black text-indigo-600 mt-2">{APP_NAME}</h1>
           <p className="text-sm text-slate-500 mt-1">{title}</p>
-          {inviteInfo?.valid && inviteInfo.invitation_type === 'project' && (
-            <p className="text-xs text-emerald-600 font-medium mt-1">
-              Invited as <strong>{inviteInfo.role}</strong>
-            </p>
-          )}
+
         </div>
 
         {error && (
@@ -169,7 +165,7 @@ export default function RegisterPage() {
           </div>
           <div>
             <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">
-              Confirm password
+              {t('auth.confirmPassword')}
             </label>
             <input
               type="password"
@@ -180,7 +176,7 @@ export default function RegisterPage() {
               minLength={6}
             />
             {form.password2 && form.password !== form.password2 && (
-              <p className="text-xs text-red-600 mt-1">Passwords do not match</p>
+              <p className="text-xs text-red-600 mt-1">{t('auth.passwordsDoNotMatch')}</p>
             )}
           </div>
 
@@ -189,7 +185,7 @@ export default function RegisterPage() {
             disabled={loading || !form.username || !form.display_name || form.password.length < 6 || form.password !== form.password2}
             className="btn-primary w-full justify-center py-2.5"
           >
-            {loading ? '…' : isNewSetup ? 'Create admin account' : t('auth.registerButton')}
+            {loading ? '…' : isNewSetup ? t('auth.createAdminAccount') : t('auth.registerButton')}
           </button>
 
           {!isNewSetup && !token && !needsInvite && (

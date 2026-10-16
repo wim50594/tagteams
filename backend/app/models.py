@@ -148,6 +148,7 @@ class AccountInvitation(SQLModel, table=True):
     created_by: int = Field(foreign_key="users.id", nullable=False)
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: Optional[datetime] = Field(default=None)
+    is_admin: bool = Field(default=False)
     used: bool = Field(default=False)
 
 

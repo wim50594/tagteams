@@ -6,6 +6,8 @@ from sqlmodel import select
 
 from app.auth import hash_password
 from app.models import AccountInvitation, Invitation, Project, ProjectMember, User, utcnow
+from app.routes.auth_routes import UpdateUserRoleRequest, update_user_role
+from app.services.application_settings import ApplicationSettingsService
 from app.services.iam import IAMService
 from app.services.invitation_settings import InvitationSettingsService
 
@@ -25,6 +27,19 @@ async def _admin_and_project(db):
     db.add(ProjectMember(project_id=project.id, user_id=admin.id, role="owner"))
     await db.commit()
     return admin, project
+
+
+@pytest.mark.asyncio
+async def test_application_settings_have_safe_defaults_and_can_be_saved(db):
+    assert await ApplicationSettingsService.get_max_upload_size_mb(db) == 100
+    assert await ApplicationSettingsService.get_min_password_length(db) == 8
+
+    await ApplicationSettingsService.save(
+        db, max_upload_size_mb=250, min_password_length=12
+    )
+
+    assert await ApplicationSettingsService.get_max_upload_size_mb(db) == 250
+    assert await ApplicationSettingsService.get_min_password_length(db) == 12
 
 
 @pytest.mark.asyncio
@@ -62,6 +77,20 @@ async def test_account_invitation_creates_user_without_project_membership(db):
 
 
 @pytest.mark.asyncio
+async def test_account_invitation_can_create_an_admin(db):
+    admin, _project = await _admin_and_project(db)
+    invitation = await IAMService.create_account_invitation(
+        db, admin.id, 7, is_admin=True
+    )
+
+    user = await IAMService.register_with_account_invitation(
+        db, invitation.token, "newadmin", "New admin", "secret1"
+    )
+
+    assert user.is_admin is True
+
+
+@pytest.mark.asyncio
 async def test_project_account_invitation_adds_one_new_user_to_project(db):
     admin, project = await _admin_and_project(db)
     invitation = await IAMService.create_invitation(
@@ -83,6 +112,25 @@ async def test_project_account_invitation_adds_one_new_user_to_project(db):
     )).first()
     assert stored_invitation is not None
     assert stored_invitation.used is True
+
+
+@pytest.mark.asyncio
+async def test_admin_can_update_another_users_global_role(db):
+    admin, _project = await _admin_and_project(db)
+    user = User(
+        username="student",
+        display_name="Student",
+        hashed_password=hash_password("test123"),
+    )
+    db.add(user)
+    await db.commit()
+
+    result = await update_user_role(
+        "student", UpdateUserRoleRequest(role="admin"), admin, db
+    )
+
+    assert result["role"] == "admin"
+    assert (await db.get(User, user.id)).is_admin is True
 
 
 @pytest.mark.asyncio

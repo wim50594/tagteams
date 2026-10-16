@@ -39,3 +39,7 @@ dev-dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The module-level async SQLAlchemy engine pools asyncpg connections. Keep all
+# async tests on one event loop so pooled connections never cross loop bounds.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

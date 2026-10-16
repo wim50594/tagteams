@@ -129,6 +129,7 @@ export const api = {
   get: (path, opts) => request("GET", path, opts),
   post: (path, opts) => request("POST", path, opts),
   put: (path, opts) => request("PUT", path, opts),
+  patch: (path, opts) => request("PATCH", path, opts),
   delete: (path, opts) => request("DELETE", path, opts),
 
   // Auth

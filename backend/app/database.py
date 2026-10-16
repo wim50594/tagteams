@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -26,10 +27,33 @@ async_session_factory = async_sessionmaker(
 )
 
 
+def _migrate_schema(sync_conn) -> None:
+    """Apply the small additive migrations used before Alembic is introduced."""
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("account_invitations"):
+        return
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("account_invitations")
+    }
+    if "is_admin" not in columns:
+        sync_conn.execute(
+            text(
+                "ALTER TABLE account_invitations "
+                "ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )
+
+
 async def init_db() -> None:
-    """Create all tables if they don't exist yet."""
+    """Create tables and apply backwards-compatible additive schema changes."""
+    # Ensure all SQLModel tables are registered even when this function is
+    # invoked outside the FastAPI application startup path.
+    import app.models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
+        await conn.run_sync(_migrate_schema)
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

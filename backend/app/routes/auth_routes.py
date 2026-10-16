@@ -24,6 +24,7 @@ from app.auth import (
 from app.config import get_settings
 from app.database import get_session
 from app.models import User, Project
+from app.services.application_settings import ApplicationSettingsService
 from app.services.iam import IAMService
 from app.services.invitation_settings import InvitationSettingsService
 
@@ -52,13 +53,23 @@ class BootstrapRegisterRequest(BaseModel):
 
 
 class CreateInviteRequest(BaseModel):
-    project_id: int | None = None
+    project_id: int
     role: str = Field("annotator", pattern="^(maintainer|annotator)$")
+
+
+class CreateAccountInviteRequest(BaseModel):
+    role: str = Field("user", pattern="^(admin|user)$")
 
 
 class UpdateInvitationSettingsRequest(BaseModel):
     # None deliberately means that newly generated account links never expire.
-    expires_in_days: int | None = Field(..., ge=1, le=90)
+    expires_in_days: int | None = Field(None, ge=1, le=90)
+
+
+class UpdateApplicationSettingsRequest(BaseModel):
+    expires_in_days: int | None = Field(None, ge=1, le=90)
+    max_upload_size_mb: int = Field(..., ge=1, le=10240)
+    min_password_length: int = Field(..., ge=6, le=128)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -82,6 +93,10 @@ class CreateUserRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=80)
     password: str = Field(..., min_length=6)
     role: str = Field("user", pattern="^(admin|user)$")
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: str = Field(..., pattern="^(admin|user)$")
 
 
 # ── Login / Refresh / Logout ──────────────────────────────────
@@ -174,6 +189,7 @@ async def register(
 ):
     """Register a new user using an account invitation token."""
     try:
+        await ApplicationSettingsService.validate_password(session, body.password)
         invitation_type, _invitation = await IAMService.validate_registration_invitation(
             session, body.token
         )
@@ -225,6 +241,10 @@ async def bootstrap_register(
     if result.first():
         raise HTTPException(status_code=400, detail="Setup already complete.")
 
+    try:
+        await ApplicationSettingsService.validate_password(session, body.password)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     username = body.username.lower()
     existing = await session.exec(select(User).where(User.username == username))
     if existing.first():
@@ -261,27 +281,11 @@ async def create_invitation(
     admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_session)],
 ):
-    """Create a one-use account invitation, optionally for a project.
-
-    Only global administrators may create accounts. Existing users are added
-    directly from a project's team editor instead of through an invite link.
-    """
-    expires_in_days = await InvitationSettingsService.get_default_expiry_days(db)
-    if body.project_id is None:
-        invitation = await IAMService.create_account_invitation(
-            db=db, created_by=admin.id, expires_in_days=expires_in_days
-        )
-        return {
-            "token": invitation.token,
-            "invitation_type": "account",
-            "project_id": None,
-            "role": "user",
-            "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
-        }
-
+    """Create a one-use account invitation that also joins a project."""
     project = await db.get(Project, body.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    expires_in_days = await InvitationSettingsService.get_default_expiry_days(db)
     invitation = await IAMService.create_invitation(
         db=db,
         project_id=project.id,
@@ -301,6 +305,27 @@ async def create_invitation(
     }
 
 
+@router.post("/account-invitations", status_code=201)
+async def create_account_invitation(
+    body: CreateAccountInviteRequest,
+    admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+):
+    """Create a one-use account invitation without project membership."""
+    invitation = await IAMService.create_account_invitation(
+        db=db,
+        created_by=admin.id,
+        expires_in_days=await InvitationSettingsService.get_default_expiry_days(db),
+        is_admin=body.role == "admin",
+    )
+    return {
+        "token": invitation.token,
+        "invitation_type": "account",
+        "role": "admin" if invitation.is_admin else "user",
+        "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
+    }
+
+
 @router.get("/invitations/{token}")
 async def validate_invitation(
     token: str,
@@ -312,7 +337,11 @@ async def validate_invitation(
             db, token
         )
         if invitation_type == "account":
-            return {"valid": True, "invitation_type": "account"}
+            return {
+                "valid": True,
+                "invitation_type": "account",
+                "role": "admin" if invitation.is_admin else "user",
+            }
         project = await db.get(Project, invitation.project_id)
         return {
             "valid": True,
@@ -322,6 +351,37 @@ async def validate_invitation(
         }
     except ValueError as e:
         return {"valid": False, "detail": str(e)}
+
+
+@router.get("/application-settings")
+async def get_application_settings(
+    _admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+):
+    return {
+        "default_expiry_days": await InvitationSettingsService.get_default_expiry_days(db),
+        "max_upload_size_mb": await ApplicationSettingsService.get_max_upload_size_mb(db),
+        "min_password_length": await ApplicationSettingsService.get_min_password_length(db),
+    }
+
+
+@router.put("/application-settings")
+async def update_application_settings(
+    body: UpdateApplicationSettingsRequest,
+    _admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+):
+    await ApplicationSettingsService.save(
+        db,
+        max_upload_size_mb=body.max_upload_size_mb,
+        min_password_length=body.min_password_length,
+    )
+    await InvitationSettingsService.set_default_expiry_days(db, body.expires_in_days)
+    return {
+        "default_expiry_days": body.expires_in_days,
+        "max_upload_size_mb": body.max_upload_size_mb,
+        "min_password_length": body.min_password_length,
+    }
 
 
 @router.get("/invitation-settings")
@@ -388,6 +448,11 @@ async def update_profile(
         or not verify_password(body.current_password, current_user.hashed_password)
     ):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if body.password is not None:
+        try:
+            await ApplicationSettingsService.validate_password(db, body.password)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
 
     previous_username = current_user.username
     try:
@@ -469,6 +534,11 @@ async def create_user(
     if result.first():
         raise HTTPException(status_code=409, detail="Username already taken")
 
+    try:
+        await ApplicationSettingsService.validate_password(session, body.password)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
     user = User(
         username=username,
         display_name=body.display_name,
@@ -478,6 +548,38 @@ async def create_user(
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    return {
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": "admin" if user.is_admin else "user",
+        "language": user.language,
+    }
+
+
+# ── Admin: update user role ───────────────────────────────────
+
+@router.patch("/users/{username}")
+async def update_user_role(
+    username: str,
+    body: UpdateUserRoleRequest,
+    admin: Annotated[User, Depends(require_admin)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    username = username.lower()
+    if username == admin.username:
+        raise HTTPException(
+            status_code=400,
+            detail="Change your own admin role through another administrator",
+        )
+
+    result = await session.exec(select(User).where(User.username == username))
+    user = result.first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_admin = body.role == "admin"
+    session.add(user)
+    await session.commit()
     return {
         "username": user.username,
         "display_name": user.display_name,
@@ -516,6 +618,10 @@ async def change_password(
 ):
     if not verify_password(body.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
+    try:
+        await ApplicationSettingsService.validate_password(db, body.new_password)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
     await IAMService.update_profile(db=db, user=current_user, password=body.new_password)
     return {"status": "ok"}
