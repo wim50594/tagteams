@@ -5,14 +5,21 @@ Handles registration, invitations, and profile management.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
+from sqlalchemy import update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import hash_password, promote_first_user
-from app.models import Invitation, Project, ProjectMember, User
+from app.auth import hash_password
+from app.models import AccountInvitation, Invitation, Project, ProjectMember, User, utcnow
 from app.services.workload import WorkloadService
+
+
+# ``Invitation.expires_at = NULL`` already exists in production and means a
+# legacy unbounded link. Store newly configured "never" project links with an
+# explicit sentinel so legacy links can still be retired after seven days.
+_UNLIMITED_PROJECT_INVITATION_EXPIRY = datetime.max.replace(microsecond=0)
 
 
 class IAMService:
@@ -28,9 +35,11 @@ class IAMService:
     ) -> Invitation:
         """Generate a secure invite token for a project and role."""
         token = secrets.token_urlsafe(32)
-        expires_at = None
-        if expires_in_days:
-            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+        expires_at = (
+            _UNLIMITED_PROJECT_INVITATION_EXPIRY
+            if expires_in_days is None
+            else utcnow() + timedelta(days=expires_in_days)
+        )
 
         invitation = Invitation(
             token=token,
@@ -55,9 +64,96 @@ class IAMService:
             raise ValueError("Invalid invitation token")
         if invitation.used:
             raise ValueError("Invitation token has already been used")
-        if invitation.expires_at and invitation.expires_at < datetime.now(timezone.utc):
+        # Older invitations were created before expiry was mandatory. They
+        # intentionally receive the original seven-day lifetime as well.
+        if invitation.expires_at is None:
+            expires_at = invitation.created_at + timedelta(days=7)
+        elif invitation.expires_at == _UNLIMITED_PROJECT_INVITATION_EXPIRY:
+            return invitation
+        else:
+            expires_at = invitation.expires_at
+        if expires_at < utcnow():
             raise ValueError("Invitation token has expired")
         return invitation
+
+    @staticmethod
+    def is_unlimited_project_invitation(invitation: Invitation) -> bool:
+        return invitation.expires_at == _UNLIMITED_PROJECT_INVITATION_EXPIRY
+
+    @staticmethod
+    async def create_account_invitation(
+        db: AsyncSession, created_by: int, expires_in_days: int | None
+    ) -> AccountInvitation:
+        """Create a one-use account invitation without project membership."""
+        invitation = AccountInvitation(
+            token=secrets.token_urlsafe(32),
+            created_by=created_by,
+            expires_at=(utcnow() + timedelta(days=expires_in_days))
+            if expires_in_days is not None else None,
+        )
+        db.add(invitation)
+        await db.commit()
+        await db.refresh(invitation)
+        return invitation
+
+    @staticmethod
+    async def validate_account_invitation(
+        db: AsyncSession, token: str
+    ) -> AccountInvitation:
+        result = await db.exec(
+            select(AccountInvitation).where(AccountInvitation.token == token)
+        )
+        invitation = result.first()
+        if not invitation:
+            raise ValueError("Invalid invitation token")
+        if invitation.used:
+            raise ValueError("Invitation token has already been used")
+        if invitation.expires_at and invitation.expires_at < utcnow():
+            raise ValueError("Invitation token has expired")
+        return invitation
+
+    @staticmethod
+    async def validate_registration_invitation(
+        db: AsyncSession, token: str
+    ) -> tuple[str, Invitation | AccountInvitation]:
+        """Find and validate either kind of account-creation invitation."""
+        project_invitation = (await db.exec(
+            select(Invitation).where(Invitation.token == token)
+        )).first()
+        if project_invitation:
+            return "project", await IAMService.validate_invitation(db, token)
+        return "account", await IAMService.validate_account_invitation(db, token)
+
+    @staticmethod
+    async def _claim_invitation(
+        db: AsyncSession, invitation: Invitation | AccountInvitation
+    ) -> None:
+        """Atomically reserve a link so concurrent requests cannot reuse it."""
+        invitation_type = type(invitation)
+        result = await db.exec(
+            update(invitation_type)
+            .where(invitation_type.id == invitation.id, invitation_type.used.is_(False))
+            .values(used=True)
+        )
+        if result.rowcount != 1:
+            raise ValueError("Invitation token has already been used")
+
+    @staticmethod
+    async def _create_invited_user(
+        db: AsyncSession, username: str, display_name: str, password: str
+    ) -> User:
+        result = await db.exec(select(User).where(User.username == username.lower()))
+        if result.first():
+            raise ValueError("Username already taken")
+        user = User(
+            username=username.lower(),
+            display_name=display_name,
+            hashed_password=hash_password(password),
+            is_admin=False,
+        )
+        db.add(user)
+        await db.flush()
+        return user
 
     @staticmethod
     async def register_with_invitation(
@@ -69,28 +165,15 @@ class IAMService:
     ) -> User:
         """Register a new user using a valid invitation token.
 
-        Creates the user, marks the invitation as used, and adds the
-        user as a project member with the invited role.
+        Creates the user, consumes the invitation, and adds the user as a
+        project member with the invited role.
         """
         invitation = await IAMService.validate_invitation(db, token)
 
-        # Check username uniqueness
-        result = await db.exec(select(User).where(User.username == username.lower()))
-        if result.first():
-            raise ValueError("Username already taken")
-
-        # Create user (first user gets admin if no admin exists)
-        user = User(
-            username=username.lower(),
-            display_name=display_name,
-            hashed_password=hash_password(password),
-            is_admin=False,
+        await IAMService._claim_invitation(db, invitation)
+        user = await IAMService._create_invited_user(
+            db, username, display_name, password
         )
-        db.add(user)
-        await db.flush()
-
-        # Delete invitation (no longer needed)
-        await db.delete(invitation)
 
         # Add as project member
         membership = ProjectMember(
@@ -118,7 +201,24 @@ class IAMService:
                 if new_batches:
                     await _write_batches(db, project.id, new_batches)
 
-        await promote_first_user(db)
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    @staticmethod
+    async def register_with_account_invitation(
+        db: AsyncSession,
+        token: str,
+        username: str,
+        display_name: str,
+        password: str,
+    ) -> User:
+        """Register a new user from an account-only invitation."""
+        invitation = await IAMService.validate_account_invitation(db, token)
+        await IAMService._claim_invitation(db, invitation)
+        user = await IAMService._create_invited_user(
+            db, username, display_name, password
+        )
         await db.commit()
         await db.refresh(user)
         return user

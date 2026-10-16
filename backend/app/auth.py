@@ -162,9 +162,9 @@ async def require_admin(
 
 async def ensure_bootstrap_admin(session: AsyncSession) -> None:
     """
-    Bootstrap admin from environment variables when ADMIN_BOOTSTRAP=True.
-    When ADMIN_BOOTSTRAP is False or unset, the first user to register
-    automatically becomes admin via promote_first_user().
+    Bootstrap an admin from environment variables when ADMIN_BOOTSTRAP=True.
+    Otherwise, the first account is created through the bootstrap-registration
+    endpoint, which always creates an administrator.
     """
     settings = get_settings()
 
@@ -185,17 +185,3 @@ async def ensure_bootstrap_admin(session: AsyncSession) -> None:
     )
     session.add(admin)
     await session.commit()
-
-
-async def promote_first_user(session: AsyncSession) -> None:
-    """If no admin exists, promote the first registered user to admin."""
-    result = await session.exec(select(User).where(User.is_admin.is_(True)))
-    if result.first():
-        return  # admin already exists
-
-    result = await session.exec(select(User).order_by(User.id).limit(1))
-    first_user = result.first()
-    if first_user:
-        first_user.is_admin = True
-        session.add(first_user)
-        await session.commit()

@@ -6,6 +6,7 @@
   "nav": {
     "projects": "Projekte",
     "users": "Benutzer",
+    "settings": "Einstellungen",
     "signOut": "Abmelden",
     "profile": "Profil"
   },
@@ -152,6 +153,7 @@
     "displayName": "Anzeigename",
     "username": "Benutzername",
     "newPassword": "Neues Passwort",
+    "currentPassword": "Aktuelles Passwort",
     "passwordHint": "Min. 6 Zeichen. Leer lassen, um aktuelles beizubehalten.",
     "usernameHint": "Kleinbuchstaben, Zahlen, _ und -.",
     "saveChanges": "Änderungen speichern",
@@ -159,6 +161,24 @@
     "noChanges": "Keine Änderungen zum Speichern.",
     "updated": "Profil erfolgreich aktualisiert.",
     "language": "Sprache"
+  },
+  "adminSettings": {
+    "title": "Administrationseinstellungen",
+    "subtitle": "Globale Vorgaben für neue Benutzerkonten konfigurieren.",
+    "inviteLinks": "Einladungslinks für Benutzerkonten",
+    "inviteLinksDescription": "Mit einem Einladungslink kann einmalig ein Benutzerkonto erstellt und optional direkt zu einem Projekt hinzugefügt werden. Bestehende Benutzer werden direkt in der Projekt-Teamverwaltung hinzugefügt.",
+    "defaultExpiry": "Standardablauf für Links",
+    "oneDay": "1 Tag",
+    "sevenDays": "7 Tage (empfohlen)",
+    "fourteenDays": "14 Tage",
+    "thirtyDays": "30 Tage",
+    "ninetyDays": "90 Tage",
+    "neverExpires": "Läuft nicht ab",
+    "expiryHint": "Die Einstellung gilt nur für künftig erstellte Links. Standardmäßig laufen Links nach 7 Tagen ab. Alte Links ohne explizites Ablaufdatum gelten ebenfalls nach 7 Tagen als abgelaufen.",
+    "neverWarning": "Links ohne Ablauf bleiben bis zur Nutzung gültig. Teile sie nur über vertrauenswürdige Kanäle.",
+    "save": "Einstellungen speichern",
+    "saving": "Speichere…",
+    "saved": "Einladungseinstellungen gespeichert."
   },
   "usersPage": {
     "title": "Benutzer",

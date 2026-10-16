@@ -10,6 +10,7 @@ export default function ProfilePage() {
     display_name: user?.display_name || '',
     username: user?.username || '',
     password: '',
+    current_password: '',
   })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState(null)
@@ -22,7 +23,10 @@ export default function ProfilePage() {
       const body = {}
       if (form.display_name !== user.display_name) body.display_name = form.display_name.trim()
       if (form.username !== user.username) body.username = form.username.trim().toLowerCase()
-      if (form.password) body.password = form.password
+      if (form.password) {
+        body.password = form.password
+        body.current_password = form.current_password
+      }
 
       if (Object.keys(body).length === 0) {
         setMessage({ type: 'info', text: t('profile.noChanges') })
@@ -35,7 +39,7 @@ export default function ProfilePage() {
       if (updated.access_token) {
         localStorage.setItem('tt_token', updated.access_token)
       }
-      setForm((prev) => ({ ...prev, password: '' }))
+      setForm((prev) => ({ ...prev, password: '', current_password: '' }))
       setMessage({ type: 'success', text: t('profile.updated') })
     } catch (err) {
       setMessage({ type: 'error', text: err.message })
@@ -97,19 +101,36 @@ export default function ProfilePage() {
           <p className="text-xs text-slate-400 mt-1">{t('profile.usernameHint')}</p>
         </div>
 
-        <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">
-            {t('profile.newPassword')}
-          </label>
-          <input
-            type="password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            className="input-base"
-            autoComplete="new-password"
-            minLength={6}
-          />
-          <p className="text-xs text-slate-400 mt-1">{t('profile.passwordHint')}</p>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">
+              {t('profile.newPassword')}
+            </label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="input-base"
+              autoComplete="new-password"
+              minLength={6}
+            />
+            <p className="text-xs text-slate-400 mt-1">{t('profile.passwordHint')}</p>
+          </div>
+          {form.password && (
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1 uppercase tracking-wide">
+                {t('profile.currentPassword')}
+              </label>
+              <input
+                type="password"
+                value={form.current_password}
+                onChange={(e) => setForm({ ...form, current_password: e.target.value })}
+                className="input-base"
+                autoComplete="current-password"
+                required
+              />
+            </div>
+          )}
         </div>
 
         <div>

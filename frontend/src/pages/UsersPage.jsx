@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../lib/api'
-import { useAuth } from '../lib/auth'
 
 export default function UsersPage() {
-  const { user: me } = useAuth()
   const [users, setUsers] = useState([])
   const [form, setForm] = useState({ username: '', display_name: '', password: '', role: 'user' })
   const [errors, setErrors] = useState({})
@@ -31,7 +29,6 @@ export default function UsersPage() {
     try {
       const data = await api.get('/api/sessions')
       setProjects(data)
-      if (data.length > 0 && !inviteProjectId) setInviteProjectId(data[0].id)
     } catch { /* non-critical */ }
   }
 
@@ -79,11 +76,13 @@ export default function UsersPage() {
   }
 
   const handleInvite = async () => {
-    if (!inviteProjectId) { showToast('Select a project first.', 'error'); return }
     setInviting(true)
     try {
       const res = await api.post('/api/auth/invitations', {
-        body: { project_id: parseInt(inviteProjectId), role: inviteRole },
+        body: {
+          project_id: inviteProjectId ? Number(inviteProjectId) : null,
+          role: inviteRole,
+        },
       })
       const link = `${window.location.origin}/register?token=${res.token}`
       setInviteToken({ link, ...res })
@@ -115,29 +114,35 @@ export default function UsersPage() {
         <p className="text-sm text-slate-500 mt-1">Create accounts and generate invitation links.</p>
       </div>
 
-      {/* ── Invite section ── */}
+      {/* ── Account invitation ── */}
       <div className="card space-y-4">
-        <h2 className="font-bold text-slate-800 text-base">🔗 Invite user to project</h2>
-        <p className="text-xs text-slate-500">Generates a link the new user can visit to set their credentials and join a project.</p>
+        <div>
+          <h2 className="font-bold text-slate-800 text-base">🔗 Create account invitation</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            The recipient sets their own password. Optionally, their new account is added directly to a project.
+          </p>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1">Project</label>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Project (optional)</label>
             <select
               value={inviteProjectId}
               onChange={(e) => setInviteProjectId(e.target.value)}
               className="input-base"
             >
+              <option value="">No project</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-bold text-slate-600 mb-1">Role</label>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Project role</label>
             <select
               value={inviteRole}
+              disabled={!inviteProjectId}
               onChange={(e) => setInviteRole(e.target.value)}
-              className="input-base"
+              className="input-base disabled:bg-slate-100 disabled:text-slate-400"
             >
               <option value="annotator">Annotator</option>
               <option value="maintainer">Maintainer</option>
@@ -145,14 +150,15 @@ export default function UsersPage() {
           </div>
           <div className="flex items-end">
             <button onClick={handleInvite} disabled={inviting} className="btn-primary w-full">
-              {inviting ? 'Generating…' : 'Generate invite link'}
+              {inviting ? 'Generating…' : 'Generate account link'}
             </button>
           </div>
         </div>
+        <p className="text-xs text-slate-500">New links use the expiry configured in Administration settings.</p>
 
         {inviteToken && (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
-            <p className="text-xs font-bold text-emerald-800">✅ Invitation link (copy and send to the user):</p>
+            <p className="text-xs font-bold text-emerald-800">✅ Account invitation link (copy and send to the recipient):</p>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -169,8 +175,10 @@ export default function UsersPage() {
               </button>
             </div>
             <p className="text-xs text-emerald-600">
-              Role: <strong>{inviteToken.role}</strong>
-              {inviteToken.expires_at && <> · Expires: {new Date(inviteToken.expires_at).toLocaleString()}</>}
+              {inviteToken.project_id ? <>Project role: <strong>{inviteToken.role}</strong> · </> : 'No project · '}
+              {inviteToken.expires_at
+                ? <>Expires: {new Date(inviteToken.expires_at).toLocaleString()}</>
+                : <>Does not expire</>}
             </p>
           </div>
         )}

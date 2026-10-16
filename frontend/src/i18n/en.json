@@ -6,6 +6,7 @@
   "nav": {
     "projects": "Projects",
     "users": "Users",
+    "settings": "Settings",
     "signOut": "Sign out",
     "profile": "Profile"
   },
@@ -152,6 +153,7 @@
     "displayName": "Display name",
     "username": "Username",
     "newPassword": "New password",
+    "currentPassword": "Current password",
     "passwordHint": "Min. 6 characters. Leave empty to keep unchanged.",
     "usernameHint": "Lowercase letters, numbers, _ and - only.",
     "saveChanges": "Save changes",
@@ -159,6 +161,24 @@
     "noChanges": "No changes to save.",
     "updated": "Profile updated successfully.",
     "language": "Language"
+  },
+  "adminSettings": {
+    "title": "Administration settings",
+    "subtitle": "Configure global defaults for new user accounts.",
+    "inviteLinks": "Account invitation links",
+    "inviteLinksDescription": "Account links can be used once to create a user, optionally adding that user to a project. Existing users are added directly in a project's team editor.",
+    "defaultExpiry": "Default link expiry",
+    "oneDay": "1 day",
+    "sevenDays": "7 days (recommended)",
+    "fourteenDays": "14 days",
+    "thirtyDays": "30 days",
+    "ninetyDays": "90 days",
+    "neverExpires": "Never expires",
+    "expiryHint": "This applies only to links created after saving. The standard setting is 7 days. Existing legacy links without an explicit expiry are already treated as expired after 7 days.",
+    "neverWarning": "Links without an expiry stay valid until used. Share them only through trusted channels.",
+    "save": "Save settings",
+    "saving": "Saving…",
+    "saved": "Invitation settings saved."
   },
   "usersPage": {
     "title": "Users",

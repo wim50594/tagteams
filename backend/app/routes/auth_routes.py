@@ -25,6 +25,7 @@ from app.config import get_settings
 from app.database import get_session
 from app.models import User, Project
 from app.services.iam import IAMService
+from app.services.invitation_settings import InvitationSettingsService
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -51,9 +52,13 @@ class BootstrapRegisterRequest(BaseModel):
 
 
 class CreateInviteRequest(BaseModel):
-    project_id: int
-    role: str = Field("user", pattern="^(maintainer|annotator)$")  # project-level role
-    expires_in_days: int | None = None
+    project_id: int | None = None
+    role: str = Field("annotator", pattern="^(maintainer|annotator)$")
+
+
+class UpdateInvitationSettingsRequest(BaseModel):
+    # None deliberately means that newly generated account links never expire.
+    expires_in_days: int | None = Field(..., ge=1, le=90)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -65,6 +70,7 @@ class UpdateProfileRequest(BaseModel):
     display_name: str | None = Field(None, min_length=1, max_length=80)
     username: str | None = Field(None, min_length=2, max_length=40)
     password: str | None = Field(None, min_length=6)
+    current_password: str | None = None
 
 
 class LanguageRequest(BaseModel):
@@ -166,15 +172,27 @@ async def register(
     session: Annotated[AsyncSession, Depends(get_session)],
     response: Response,
 ):
-    """Register a new user using an invitation token."""
+    """Register a new user using an account invitation token."""
     try:
-        user = await IAMService.register_with_invitation(
-            db=session,
-            token=body.token,
-            username=body.username,
-            display_name=body.display_name,
-            password=body.password,
+        invitation_type, _invitation = await IAMService.validate_registration_invitation(
+            session, body.token
         )
+        if invitation_type == "project":
+            user = await IAMService.register_with_invitation(
+                db=session,
+                token=body.token,
+                username=body.username,
+                display_name=body.display_name,
+                password=body.password,
+            )
+        else:
+            user = await IAMService.register_with_account_invitation(
+                db=session,
+                token=body.token,
+                username=body.username,
+                display_name=body.display_name,
+                password=body.password,
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -240,37 +258,46 @@ async def bootstrap_register(
 @router.post("/invitations", status_code=201)
 async def create_invitation(
     body: CreateInviteRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    admin: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_session)],
 ):
-    """Create an invitation token for a project and role.
+    """Create a one-use account invitation, optionally for a project.
 
-    Only admins, the project owner, and maintainers can create invitations.
+    Only global administrators may create accounts. Existing users are added
+    directly from a project's team editor instead of through an invite link.
     """
+    expires_in_days = await InvitationSettingsService.get_default_expiry_days(db)
+    if body.project_id is None:
+        invitation = await IAMService.create_account_invitation(
+            db=db, created_by=admin.id, expires_in_days=expires_in_days
+        )
+        return {
+            "token": invitation.token,
+            "invitation_type": "account",
+            "project_id": None,
+            "role": "user",
+            "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
+        }
+
     project = await db.get(Project, body.project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-
-    can_manage = await IAMService.can_manage_project(db, body.project_id, current_user)
-    if not can_manage:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins, project owners, and maintainers can invite users",
-        )
-
     invitation = await IAMService.create_invitation(
         db=db,
-        project_id=body.project_id,
+        project_id=project.id,
         role=body.role,
-        created_by=current_user.id,
-        expires_in_days=body.expires_in_days,
+        created_by=admin.id,
+        expires_in_days=expires_in_days,
     )
-
     return {
         "token": invitation.token,
+        "invitation_type": "project",
         "project_id": invitation.project_id,
         "role": invitation.role,
-        "expires_at": invitation.expires_at.isoformat() if invitation.expires_at else None,
+        "expires_at": (
+            None if IAMService.is_unlimited_project_invitation(invitation)
+            else invitation.expires_at.isoformat() if invitation.expires_at else None
+        ),
     }
 
 
@@ -279,17 +306,44 @@ async def validate_invitation(
     token: str,
     db: Annotated[AsyncSession, Depends(get_session)],
 ):
-    """Look up an invitation token (public endpoint – used by registration page)."""
+    """Public validation endpoint for a one-use account invitation."""
     try:
-        invitation = await IAMService.validate_invitation(db, token)
+        invitation_type, invitation = await IAMService.validate_registration_invitation(
+            db, token
+        )
+        if invitation_type == "account":
+            return {"valid": True, "invitation_type": "account"}
         project = await db.get(Project, invitation.project_id)
         return {
             "valid": True,
+            "invitation_type": "project",
             "project_name": project.name if project else "Unknown",
             "role": invitation.role,
         }
     except ValueError as e:
         return {"valid": False, "detail": str(e)}
+
+
+@router.get("/invitation-settings")
+async def get_invitation_settings(
+    _admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+):
+    return {
+        "default_expiry_days": await InvitationSettingsService.get_default_expiry_days(db)
+    }
+
+
+@router.put("/invitation-settings")
+async def update_invitation_settings(
+    body: UpdateInvitationSettingsRequest,
+    _admin: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_session)],
+):
+    value = await InvitationSettingsService.set_default_expiry_days(
+        db, body.expires_in_days
+    )
+    return {"default_expiry_days": value}
 
 
 # ── Current user / profile ────────────────────────────────────
@@ -329,6 +383,13 @@ async def update_profile(
     Returns a fresh access token when the username changes so the
     JWT sub claim stays in sync.
     """
+    if body.password is not None and (
+        not body.current_password
+        or not verify_password(body.current_password, current_user.hashed_password)
+    ):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    previous_username = current_user.username
     try:
         user = await IAMService.update_profile(
             db=db,
@@ -340,7 +401,7 @@ async def update_profile(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    username_changed = body.username is not None and body.username.lower() != current_user.username
+    username_changed = user.username != previous_username
 
     result: dict = {
         "username": user.username,

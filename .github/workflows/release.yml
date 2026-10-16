@@ -1,69 +1,118 @@
 name: Release
+
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (for example v2.1.16)"
+        required: true
+        type: string
 
-permissions: { contents: write, packages: write }
+permissions:
+  contents: write
+  packages: write
+
+# Serialise releases so two quick pushes cannot calculate and create the same tag.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         component: [backend, frontend]
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        if: matrix.component == 'backend'
+        with:
+          enable-cache: true
+      - name: Test backend
+        if: matrix.component == 'backend'
+        working-directory: ./backend
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          JWT_SECRET: release-test-secret
+      - uses: actions/setup-node@v4
+        if: matrix.component == 'frontend'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        if: matrix.component == 'frontend'
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+
+  prepare:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      raw_tag: ${{ steps.version.outputs.raw_tag }}
+    steps:
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Bump version and push tag
+      - name: Create next patch tag
         id: auto_tag
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'push'
         uses: anothrNick/github-tag-action@1.71.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: patch
 
-      # Docker setups
+      - name: Validate and expose version
+        id: version
+        env:
+          AUTO_TAG: ${{ steps.auto_tag.outputs.new_tag }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          VERSION="${AUTO_TAG:-$MANUAL_VERSION}"
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a semantic version such as v2.1.16; got '$VERSION'." >&2
+            exit 1
+          fi
+          echo "raw_tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "value=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+  publish-images:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # handles manual tags, auto tags, and provides a dev fallback
-      - name: Determine app version
-        id: version
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION="${{ github.ref_name }}"
-          elif [[ -n "${{ steps.auto_tag.outputs.new_tag }}" ]]; then
-            VERSION="${{ steps.auto_tag.outputs.new_tag }}"
-          else
-            echo "ERROR: No valid tag found and auto-bump failed!"
-            exit 1
-          fi
-
-          CLEAN_VERSION="${VERSION#v}"
-          echo "value=$CLEAN_VERSION" >> "$GITHUB_OUTPUT"
-          echo "raw_tag=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Generate Docker metadata
-        if: steps.version.outputs.value != 'dev'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: docker.io/lehrstuhlkesdogan/tagteams-${{ matrix.component }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.version.outputs.raw_tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.raw_tag }}
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.raw_tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.raw_tag }}
             type=sha,format=short
-            type=raw,value=latest,enable={{is_default_branch}}
-
+            type=raw,value=latest
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -73,14 +122,18 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ steps.version.outputs.value }}
-            VITE_APP_VERSION=${{ steps.version.outputs.value }}
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+            VITE_APP_VERSION=${{ needs.prepare.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Create GitHub Release
+  create-release:
+    needs: [prepare, publish-images]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.raw_tag }}
-          name: Release ${{ steps.version.outputs.raw_tag }}
+          tag_name: ${{ needs.prepare.outputs.raw_tag }}
+          name: Release ${{ needs.prepare.outputs.raw_tag }}
           generate_release_notes: true

@@ -82,9 +82,11 @@ export default function RegisterPage() {
 
   const title = isNewSetup
     ? 'Set up your admin account'
-    : inviteInfo?.valid
+    : inviteInfo?.valid && inviteInfo.invitation_type === 'project'
       ? `Join "${inviteInfo.project_name}" as ${inviteInfo.role}`
-      : t('auth.register')
+      : inviteInfo?.valid
+        ? 'Create your account'
+        : t('auth.register')
 
   if (needsInvite) {
     return (
@@ -111,7 +113,7 @@ export default function RegisterPage() {
           <span className="text-5xl">🏷️</span>
           <h1 className="text-2xl font-black text-indigo-600 mt-2">{APP_NAME}</h1>
           <p className="text-sm text-slate-500 mt-1">{title}</p>
-          {inviteInfo?.valid && (
+          {inviteInfo?.valid && inviteInfo.invitation_type === 'project' && (
             <p className="text-xs text-emerald-600 font-medium mt-1">
               Invited as <strong>{inviteInfo.role}</strong>
             </p>

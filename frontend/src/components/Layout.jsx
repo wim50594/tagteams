@@ -50,6 +50,7 @@ export default function Layout() {
           <nav className="flex items-center gap-1">
             {navLink('/', t('nav.projects'))}
             {isAdmin && navLink('/users', t('nav.users'))}
+            {isAdmin && navLink('/admin/settings', t('nav.settings'))}
           </nav>
 
           {/* Language + user badge + logout */}

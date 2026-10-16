@@ -2,7 +2,7 @@
 SQLModel table definitions.
 
 Core entities:
-  User, Project, ProjectMember, Invitation,
+  User, Project, ProjectMember, Invitation, AccountInvitation, SystemSetting,
   TaxonomyNode, Annotation, FinalDecision,
   Item, ItemRef, TableUpload
 
@@ -136,6 +136,29 @@ class Invitation(SQLModel, table=True):
     used: bool = Field(default=False)
 
     project: "Project" = Relationship(back_populates="invitations")
+
+
+class AccountInvitation(SQLModel, table=True):
+    """One-use invitation that creates an account without a project."""
+
+    __tablename__ = "account_invitations"
+
+    id: int = Field(default=None, primary_key=True)
+    token: str = Field(index=True, unique=True, nullable=False)
+    created_by: int = Field(foreign_key="users.id", nullable=False)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: Optional[datetime] = Field(default=None)
+    used: bool = Field(default=False)
+
+
+class SystemSetting(SQLModel, table=True):
+    """Small persistent store for settings editable by administrators."""
+
+    __tablename__ = "system_settings"
+
+    key: str = Field(primary_key=True, max_length=100)
+    value: str = Field(nullable=False)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 # ── TaxonomyNode ──────────────────────────────────────────────

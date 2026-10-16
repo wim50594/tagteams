@@ -8,6 +8,7 @@ import ConfigPage from './pages/ConfigPage'
 import WorkspacePage from './pages/WorkspacePage'
 import ReviewPage from './pages/ReviewPage'
 import UsersPage from './pages/UsersPage'
+import AdminSettingsPage from './pages/AdminSettingsPage'
 import ProfilePage from './pages/ProfilePage'
 
 /** Redirect to /login if not authenticated. */
@@ -47,6 +48,14 @@ export default function App() {
           element={
             <RequireAdmin>
               <UsersPage />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="admin/settings"
+          element={
+            <RequireAdmin>
+              <AdminSettingsPage />
             </RequireAdmin>
           }
         />
